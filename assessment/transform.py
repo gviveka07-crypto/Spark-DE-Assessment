@@ -1,61 +1,56 @@
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, functions as F
 
 
 def compute(edges: DataFrame) -> DataFrame:
-    """The assessment logic
+   
+    spark = edges.sparkSession
 
-    This function is where you will define the logic for the assessment. The
-    function will receive a dataframe of edges representing a hierarchical structure,
-    and return a dataframe of nodes containing structural information describing the
-    hierarchy.
+    edge_list = [(row["parent"], row["child"]) for row in edges.collect()]
 
-    Consider the tree structure below:
-    A
-    |-- B
-    |   `-- C
-    |-- D
-    `-- E
-        |-- F
-        `-- G
+    children_map = {}
+    parents = set()
+    all_nodes = set()
+
+    for p, c in edge_list:
+        children_map.setdefault(p, []).append(c)
+        parents.add(p)
+        all_nodes.add(p)
+        all_nodes.add(c)
 
 
-    Parameters
-    ----------
-    edges: DataFrame
-        A dataframe of edges representing a hierarchical structure. For the example
-        above, the dataframe would be:
+    child_nodes = {c for _, c in edge_list}
+    root = list(all_nodes - child_nodes)[0]
 
-        | parent | child |
-        |--------|-------|
-        | A      | B     |
-        | B      | C     |
-        | A      | D     |
-        | A      | E     |
-        | E      | F     |
-        | E      | G     |
+    results = []
 
-    Returns
-    -------
-    DataFrame
-        A dataframe of nodes with the following columns:
-            - node: The node of the hierarchy
-            - path: The path to the node from the root
-            - depth: The depth of the node in the hierarchy
-            - descendents: The number of descendents of the node
-            - is_root: Whether the node is the root of the hierarchy
-            - is_leaf: Whether the node is a leaf of the hierarchy
+    def dfs(node, path, depth):
+        kids = children_map.get(node, [])
+        descendants = 0
 
-        The output dataframe for the example above would look like:
+        for k in kids:
+            d = dfs(k, path + "." + k, depth + 1)
+            descendants += 1 + d
 
-        | node | path  | depth | descendents | is_root | is_leaf |
-        |------|-------|-------|-------------|---------|---------|
-        | A    | A     | 0     | 6           | true    | false   |
-        | B    | A.B   | 1     | 1           | false   | false   |
-        | C    | A.B.C | 2     | 0           | false   | true    |
-        | D    | A.D   | 1     | 0           | false   | true    |
-        | E    | A.E   | 1     | 2           | false   | false   |
-        | F    | A.E.F | 2     | 0           | false   | true    |
-        | G    | A.E.G | 2     | 0           | false   | true    |
+        results.append(
+            (
+                node,
+                path,
+                depth,
+                descendants,
+                node == root,
+                len(kids) == 0,
+            )
+        )
+        return descendants
 
-    """
-    ...
+    # Lets start recursion at root
+    dfs(root, root, 0)
+
+    # finally create Spark DataFrame from  results as per the requested schema
+    df = spark.createDataFrame(
+        results,
+        ["node", "path", "depth", "descendants", "is_root", "is_leaf"],
+    )
+
+    return df
+
